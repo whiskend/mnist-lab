@@ -29,10 +29,47 @@ class NeuralNetwork:
             use_dropout: 은닉층마다 Dropout을 넣을지 여부
             dropout_ratio: Dropout에서 끌 뉴런 비율
         """
-        # TODO: params dict를 만들고 Affine/BatchNorm/ReLU/Dropout layer를 순서대로 구성하세요.
-        # 권장 구조: 784 -> 512 -> 256 -> 10
-        # self.layers는 OrderedDict로 만들고, self.grads는 params와 같은 key를 갖게 합니다.
-        raise NotImplementedError("NeuralNetwork.__init__을 구현하세요.")
+        self.use_batchnorm = use_batchnorm
+        self.use_dropout = use_dropout
+        self.dropout_ratio = dropout_ratio
+
+        layer_dims = [784, 512, 256, 10]
+        self.params = OrderedDict()
+
+        for i in range(1, len(layer_dims)):
+            input_dim = layer_dims[i - 1]
+            output_dim = layer_dims[i]
+            self.params[f"W{i}"] = np.random.randn(input_dim, output_dim) * np.sqrt(
+                2.0 / input_dim
+            )
+            self.params[f"b{i}"] = np.zeros(output_dim)
+
+            if self.use_batchnorm and i < len(layer_dims) - 1:
+                self.params[f"gamma{i}"] = np.ones(output_dim)
+                self.params[f"beta{i}"] = np.zeros(output_dim)
+
+        self.layers = OrderedDict()
+        hidden_layer_count = len(layer_dims) - 2
+
+        for i in range(1, hidden_layer_count + 1):
+            self.layers[f"Affine{i}"] = Affine(self.params[f"W{i}"], self.params[f"b{i}"])
+            if self.use_batchnorm:
+                self.layers[f"BatchNorm{i}"] = BatchNorm(
+                    self.params[f"gamma{i}"], self.params[f"beta{i}"]
+                )
+            self.layers[f"ReLU{i}"] = ReLU()
+            if self.use_dropout:
+                self.layers[f"Dropout{i}"] = Dropout(self.dropout_ratio)
+
+        output_layer_idx = hidden_layer_count + 1
+        self.layers[f"Affine{output_layer_idx}"] = Affine(
+            self.params[f"W{output_layer_idx}"],
+            self.params[f"b{output_layer_idx}"],
+        )
+        self.softmax = Softmax()
+        self.grads = OrderedDict(
+            (key, np.zeros_like(value)) for key, value in self.params.items()
+        )
 
     def forward(self, x, train=True):
         """
@@ -43,8 +80,13 @@ class NeuralNetwork:
         Returns:
             (batch_size, 10) 각 숫자 클래스의 확률
         """
-        # TODO: self.layers를 순서대로 통과시키고 마지막에 Softmax를 적용하세요.
-        raise NotImplementedError("NeuralNetwork.forward를 구현하세요.")
+        out = x
+        for layer in self.layers.values():
+            if isinstance(layer, (BatchNorm, Dropout)):
+                out = layer.forward(out, train=train)
+            else:
+                out = layer.forward(out)
+        return self.softmax.forward(out)
 
     def backward(self, dout):
         """
@@ -53,8 +95,21 @@ class NeuralNetwork:
         Args:
             dout: Softmax+CrossEntropy를 합친 출력층 gradient
         """
-        # TODO: layer를 역순으로 통과시키고 Affine/BatchNorm의 gradient를 self.grads에 모으세요.
-        raise NotImplementedError("NeuralNetwork.backward를 구현하세요.")
+        dout = self.softmax.backward(dout)
+
+        for name, layer in reversed(self.layers.items()):
+            dout = layer.backward(dout)
+
+            if isinstance(layer, Affine):
+                idx = name.replace("Affine", "")
+                self.grads[f"W{idx}"] = layer.dW
+                self.grads[f"b{idx}"] = layer.db
+            elif isinstance(layer, BatchNorm):
+                idx = name.replace("BatchNorm", "")
+                self.grads[f"gamma{idx}"] = layer.dgamma
+                self.grads[f"beta{idx}"] = layer.dbeta
+
+        return dout
 
     def loss(self, x, y):
         """현재 모델의 예측 확률을 만든 뒤 cross entropy loss를 반환합니다."""
